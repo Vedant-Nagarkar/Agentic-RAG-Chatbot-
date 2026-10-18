@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime data (never commit)
+uploads/
+data/*.db
+data/*.db-journal

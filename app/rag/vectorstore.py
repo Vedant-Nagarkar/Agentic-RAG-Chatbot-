@@ -1,4 +1,6 @@
-import time  
+import re
+import time
+import hashlib
 from pinecone import Pinecone, ServerlessSpec
 from langchain_openai import OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
@@ -73,19 +75,23 @@ def ensure_index():
             current_dimension = index_info.get("dimension")
 
         if current_dimension is not None and current_dimension != desired_dimension:
-            pc.delete_index(name=settings.pinecone_index_name)
-            while settings.pinecone_index_name in [x["name"] for x in pc.list_indexes()]:
-                time.sleep(1)
+            raise RuntimeError(
+                f"Pinecone index '{settings.pinecone_index_name}' has dimension "
+                f"{current_dimension}, but embedding model '{settings.embedding_model}' "
+                f"needs {desired_dimension}. Refusing to delete the index. "
+                "Either set EMBEDDING_MODEL back to the original model, or use a new "
+                "PINECONE_INDEX_NAME and re-ingest your documents."
+            )
+        return pc.Index(settings.pinecone_index_name)
 
-    if settings.pinecone_index_name not in [x["name"] for x in pc.list_indexes()]:
-        pc.create_index(
-            name=settings.pinecone_index_name,
-            dimension=desired_dimension,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-        )
-        while not pc.describe_index(settings.pinecone_index_name).status["ready"]:
-            time.sleep(1)
+    pc.create_index(
+        name=settings.pinecone_index_name,
+        dimension=desired_dimension,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+    )
+    while not pc.describe_index(settings.pinecone_index_name).status["ready"]:
+        time.sleep(1)
 
     return pc.Index(settings.pinecone_index_name)
 
@@ -111,6 +117,19 @@ def get_retriever():
 
 
 
+def make_chunk_ids(chunks):
+    counters = {}
+    ids = []
+    for chunk in chunks:
+        source = str(chunk.metadata.get("source", "unknown"))
+        name = re.split(r"[\\/]", source)[-1]
+        number = counters.get(name, 0)
+        counters[name] = number + 1
+        prefix = hashlib.sha1(name.encode("utf-8")).hexdigest()[:16]
+        ids.append(f"{prefix}:{number}")
+    return ids
+
+
 def add_documents(chunks):
     store = get_vectorstore()
-    return store.add_documents(chunks)
+    return store.add_documents(chunks, ids=make_chunk_ids(chunks))
