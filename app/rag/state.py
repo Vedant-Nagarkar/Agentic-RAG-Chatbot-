@@ -5,7 +5,10 @@ from langchain_core.documents import Document
 
 class RouteDecision(BaseModel):
     route: Literal["kb", "direct"] = Field(description="kb for IT/support questions; direct for greetings/simple chat")
-
+    company_specific: bool = Field(
+        default=False,
+        description="true if the answer depends on this company's own policies, tools, systems or procedures",
+    )
 class EvidenceGrade(BaseModel):
     grade: Literal["good", "weak"] = Field(description="Whether evidence is sufficient to answer")
 
@@ -21,3 +24,4 @@ class AgentState(TypedDict):
     retry_count: int
     trace: List[str]
     citations: List[dict]
+    web_allowed: bool

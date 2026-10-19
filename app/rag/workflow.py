@@ -47,13 +47,26 @@ def route_question(state: AgentState):
     router = llm().with_structured_output(RouteDecision, method="json_mode")
     decision = router.invoke(f"""
 You route messages for an enterprise IT support assistant.
-Use kb for questions about company IT policies, VPN, password reset, MFA, laptop setup,
-software access, security, email, devices, troubleshooting, or technology support.
-Use direct only for greetings, thanks, or casual chat that needs no company knowledge.
+route:
+- "kb" for questions about company IT policies, VPN, password reset, MFA, laptop setup,
+  software access, security, email, devices, troubleshooting, or technology support.
+- "direct" only for greetings, thanks, or casual chat that needs no company knowledge.
+company_specific:
+- true if the question mentions the company or its own things: "our", "my work", "the company",
+  internal tools, internal names or policies
+     (for example: "our VPN", "the company password policy", "my work badge reader").
+  - false if the question is about a public product, a public error code or a public vendor service,
+     (for example: "How do I change the default browser on a Mac?",
+     "Is GitHub having an outage right now?", "What does a DNS server do?").
+- Return true only when you truly cannot tell.
 Question: {state['question']}
-Return valid JSON like {{"route":"kb"}}.
+Return valid JSON like {{"route":"kb","company_specific":true}}.
 """)
-    return {"source_used": decision.route, "trace": add_trace(state, f"Router → {decision.route.upper()}")}
+    return {
+        "source_used": decision.route,
+        "web_allowed": not decision.company_specific,
+        "trace": add_trace(state, f"Router → {decision.route.upper()} (company-specific: {decision.company_specific})"),
+    }
 
 def route_after_router(state: AgentState) -> Literal["retrieve_kb", "direct_answer"]:
     return "retrieve_kb" if state["source_used"] == "kb" else "direct_answer"
@@ -89,12 +102,14 @@ Otherwise return weak. JSON: {{"grade":"good"}} or {{"grade":"weak"}}.
 """)
     return {"kb_grade": grade.grade, "trace": add_trace(state, f"KB evidence grade → {grade.grade.upper()}")}
 
-def after_kb(state: AgentState) -> Literal["generate_from_kb", "rewrite_query", "search_web"]:
+def after_kb(state: AgentState) -> Literal["generate_from_kb", "rewrite_query", "search_web", "insufficient"]:
     if state["kb_grade"] == "good":
         return "generate_from_kb"
     if state["retry_count"] < settings.max_retries:
         return "rewrite_query"
-    return "search_web"
+    if state["web_allowed"]:
+        return "search_web"
+    return "insufficient"
 
 _REDACTIONS = [
     (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "[email]"),
@@ -114,7 +129,8 @@ def sanitize_for_web(query: str) -> str:
     return cleaned
 
 def search_web(state: AgentState):
-    safe_query = sanitize_for_web(state["current_query"])
+
+    safe_query = sanitize_for_web(state["question"])
     result = web_search_tool().invoke({"query": safe_query})
     lines, citations = [], []
     if isinstance(result, dict):
@@ -151,10 +167,18 @@ def after_web(state: AgentState) -> Literal["generate_from_web", "insufficient"]
 
 def rewrite_query(state: AgentState):
     rewritten = llm().invoke(f"""
-Rewrite this IT support question for better private knowledge retrieval and vendor web search.
-Preserve intent, add useful technical keywords, do not answer, return only the query.
+Rewrite this IT support question so it retrieves better results from a company knowledge base.
+Rules:
+- Keep the same meaning. Keep the words "company", "our" or "internal" if the user used them.
+- Do NOT add the words "company", "our" or "internal" if the user did not write them.
+- Add only a few technical keywords that are very likely to appear in an IT document.
+- Do NOT invent details the user did not give (no operating systems, products, vendors or versions).
+- Do NOT use placeholders or brackets such as [device] or [specific system].
+- Do NOT answer the question. Return only the rewritten query on one line.
 Question: {state['question']}
 """).content.strip()
+    if not rewritten or "[" in rewritten:
+        rewritten = state["question"]
     return {
         "current_query": rewritten,
         "retry_count": state["retry_count"] + 1,
@@ -199,8 +223,18 @@ def direct_answer(state: AgentState):
     return {"answer": answer, "source_used": "direct", "trace": add_trace(state, "Direct response → no retrieval")}
 
 def insufficient(state: AgentState):
+    if not state["web_allowed"]:
+        answer = (
+            "I couldn't find this in the company knowledge base. It looks like a company-specific question, "
+            "so I did not search the public web. Please contact the IT help desk, or ask an admin to add the relevant document."
+        )
+    else:
+        answer = (
+            "I couldn't find enough reliable evidence in the company knowledge base or external search to answer confidently. "
+            "Please contact the IT help desk or provide more details."
+        )
     return {
-        "answer": "I couldn't find enough reliable evidence in the company knowledge base or external search to answer confidently. Please contact the IT help desk or provide more details.",
+        "answer": answer,
         "source_used": "insufficient_evidence",
         "trace": add_trace(state, "Stopped → insufficient reliable evidence"),
     }
@@ -230,6 +264,7 @@ def build_graph():
         "generate_from_kb": "generate_from_kb",
         "rewrite_query": "rewrite_query",
         "search_web": "search_web",
+        "insufficient": "insufficient",
     })
     graph.add_edge("search_web", "grade_web")
     graph.add_conditional_edges("grade_web", after_web, {
@@ -258,5 +293,6 @@ def ask(question: str):
         "retry_count": 0,
         "trace": [],
         "citations": [],
+        "web_allowed": True,
     }
     return agent_graph.invoke(initial)

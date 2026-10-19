@@ -1,539 +1,376 @@
 # Enterprise IT Support Agentic RAG Chatbot
 
-An end-to-end project that turns a notebook-style Agentic RAG workflow into a deployable internal product using **LangGraph, FastAPI, Pinecone, Groq, Tavily, HTML, CSS, and JavaScript**.
+An internal IT support assistant that answers employee questions from a company's **private knowledge base first**, checks whether the evidence is good enough, and only goes to the public web when the question is not company-specific.
+
+Built with **LangGraph, FastAPI, Pinecone, OpenAI, Tavily, SQLite, and a plain HTML/CSS/JavaScript frontend**.
+
+> **Status:** working prototype with a sample knowledge base and an evaluation harness. It is not production-ready. See [Known limitations](#known-limitations).
 
 ---
 
-## 1. Business Problem
+## 1. The problem
 
-### Customer
-**NovaRetail**, a fictional 3,000-employee retail company.
+**Customer (fictional):** NovaRetail, a 3,000-employee retail company.
 
-### Problem
-The internal IT team maintains many documents: VPN instructions, password rules, MFA policy, software installation rules, laptop troubleshooting guides, and service-desk runbooks.
+The IT team keeps many documents: VPN steps, password rules, MFA policy, software rules, laptop troubleshooting and service-desk runbooks. Employees still open repeat tickets because they cannot find the right document, keyword search returns too much, and a normal chatbot may invent an answer.
 
-Employees still create repetitive support tickets because:
+Two example questions show the design goal:
 
-- They do not know where the correct document is.
-- Traditional keyword search returns too many results.
-- A normal chatbot may hallucinate an answer.
-- Internal documents can be incomplete or outdated.
-- Some questions require current vendor information from the public web.
+| Question | Right behavior |
+|---|---|
+| "How do I connect to the company VPN?" | Answer from the private KB. No web search. |
+| "What is the latest Microsoft Teams outage guidance?" | This is public vendor information. The KB is weak, so use web search and label the answer as external. |
 
-### Example
-An employee asks:
+A third case matters just as much:
 
-> **“How do I connect to the company VPN from home?”**
-
-The answer exists in the private company KB, so the system should **not search the public internet**.
-
-Another employee asks:
-
-> **“What is the latest Microsoft Teams outage guidance?”**
-
-The internal KB may not contain current outage information. The system should recognize weak private evidence, use an external search, grade that evidence, and answer with an external-source warning.
-
-### Business Goal
-Build a secure IT Support Copilot that:
-
-1. Searches trusted private knowledge first.
-2. Checks whether retrieved evidence is good enough.
-3. Uses web search only when private knowledge is insufficient.
-4. Rewrites weak queries and retries.
-5. Generates grounded answers.
-6. Shows the decision path for transparency and debugging.
-7. Lets authorized staff add new company documents.
+| Question | Right behavior |
+|---|---|
+| "What is the process for requesting a company-issued mobile phone?" | This is company-specific and not in the KB. Say so. **Do not** answer it with generic internet advice. |
 
 ---
 
+## 2. What it does
 
-```text
-Customer Problem
-      ↓
-Discovery & Requirements
-      ↓
-Solution Architecture
-      ↓
-Data / Knowledge Integration
-      ↓
-Agentic RAG Development
-      ↓
-API Development
-      ↓
-User Interface
-      ↓
-Security + Audit + Testing
-      ↓
-Deployment
-      ↓
-Observe + Improve
-```
-
-This repository demonstrates each layer.
+- Routes each message: small talk, or an IT question.
+- Decides whether a question is **company-specific** (web search not allowed) or **public** (web search allowed).
+- Retrieves from a private Pinecone knowledge base and grades the evidence.
+- If the evidence is weak, **rewrites the query and retries the KB once** before considering the web.
+- Falls back to web search only for public questions. Internal details are masked before the query leaves the system.
+- Generates answers only from the retrieved evidence, and shows the decision path (trace) in the UI.
+- Lets an admin upload PDF, TXT, MD or DOCX files into the knowledge base.
+- Writes each question, source used and trace to a SQLite audit log.
 
 ---
 
-## 3. Simple Architecture
-
-```text
-                   ┌─────────────────────┐
-                   │   Employee / User   │
-                   └──────────┬──────────┘
-                              │
-                              ▼
-                   ┌─────────────────────┐
-                   │ HTML/CSS/JavaScript │
-                   │      Web UI         │
-                   └──────────┬──────────┘
-                              │ POST /api/chat
-                              ▼
-                   ┌─────────────────────┐
-                   │       FastAPI       │
-                   └──────────┬──────────┘
-                              │
-                              ▼
-                   ┌─────────────────────┐
-                   │     LangGraph       │
-                   │ Agentic RAG Control │
-                   └──────────┬──────────┘
-                              │
-               ┌──────────────┴──────────────┐
-               │                             │
-               ▼                             ▼
-       ┌───────────────┐              ┌──────────────┐
-       │ Private KB    │              │ Tavily Web   │
-       │ Pinecone      │              │ Search       │
-       └───────┬───────┘              └──────┬───────┘
-               │                             │
-               └──────────────┬──────────────┘
-                              ▼
-                     ┌────────────────┐
-                     │ OpenAI LLM       │
-                     │ Grounded Answer│
-                     └────────────────┘
-```
-
----
-
-## 4. Agentic RAG Workflow
-
-This follows the same core implementation pattern as the reference notebook.
+## 3. Workflow
 
 ```text
 Question
-   ↓
-[1] Route Question
-   ├── Greeting / simple chat ─────────────→ Direct Answer
    │
-   └── IT support question
-                ↓
-[2] Retrieve from Private Pinecone KB
-                ↓
-[3] Grade Private Evidence
-       ┌────────┴────────┐
-       │                 │
-     GOOD               WEAK
-       │                 │
-       ▼                 ▼
-Generate from KB    [4] Tavily Web Search
-                         ↓
-                  [5] Grade Web Evidence
-                    ┌────┴─────┐
-                    │          │
-                  GOOD        WEAK
-                    │          │
-                    ▼          ▼
-              Generate Web  [6] Rewrite Query
-                               ↓
-                         Retry Private KB
-                               ↓
-                        Max retry reached?
-                               ↓
-                    Insufficient Evidence
+[1] Route ── small talk ───────────────────────────────► Direct answer
+   │         (also decides: company-specific or public?)
+   ▼
+[2] Retrieve from private KB (Pinecone)
+   ▼
+[3] Grade evidence
+   ├── GOOD ───────────────────────────────────────────► Answer from KB
+   └── WEAK
+        │
+        ├─ retry left? ─► [4] Rewrite query ─► back to [2]
+        │
+        └─ no retry left
+             ├─ company-specific ───────────────────────► Stop: "not in the KB"
+             └─ public
+                  ▼
+               [5] Web search (query masked first)
+                  ▼
+               [6] Grade web evidence
+                  ├── GOOD ───────────────────────────► Answer from web (labeled external)
+                  └── WEAK ───────────────────────────► Stop: insufficient evidence
 ```
 
-### Why Agentic?
+### Why this order
 
-Normal RAG does approximately this:
-
-```text
-Question → Retrieve → Generate
-```
-
-This project makes decisions:
-
-```text
-Question
- → Route
- → Retrieve
- → Evaluate evidence
- → Choose KB or Web
- → Rewrite if needed
- → Retry
- → Generate grounded answer
-```
-
-The system therefore controls **what to do next** based on its current state.
+- **Retry the KB before the web.** A weak KB result is often just a badly worded question. Every web call sends text outside the company, so it comes last.
+- **Company-specific questions never go to the web.** A public answer to "how do I use our backup VPN gateway?" would be wrong for the employee. When the router is unsure, it treats the question as company-specific.
+- **The model controls what happens next**, based on the state so far. This is what makes it "agentic" and not a fixed retrieve-then-generate chain.
 
 ---
 
-## 5. Main Technology Stack
+## 4. Tech stack
 
 | Layer | Technology | Purpose |
 |---|---|---|
-| Agent workflow | LangGraph | Stateful routing and conditional decisions |
-| LLM | Groq | Routing, grading, rewriting, answer generation |
-| Embeddings | OpenAI Embedding | Local 384-dimensional embeddings |
-| Vector DB | Pinecone | Private enterprise knowledge base |
-| External search | Tavily | Fallback when company KB is insufficient |
-| API | FastAPI | Backend and REST endpoints |
-| Frontend | HTML/CSS/JavaScript | Employee-facing interface |
-| Audit | SQLite | Basic decision-path logging |
-| Packaging | Docker | Reproducible deployment |
+| Agent workflow | LangGraph | Stateful routing and conditional steps |
+| LLM | OpenAI `gpt-4o-mini` (configurable) | Routing, grading, query rewriting, answers |
+| Embeddings | OpenAI `text-embedding-3-small` (1536 dimensions) | Vectorizing documents and questions |
+| Vector database | Pinecone (serverless) | Private knowledge base |
+| Web search | Tavily | Fallback for public questions |
+| API | FastAPI | REST endpoints and page serving |
+| Frontend | HTML, CSS, JavaScript | Chat UI with a live agent trace |
+| Audit log | SQLite | Question, source and trace per request |
+| Packaging | Docker | Container image |
 
 ---
 
-## 6. Project Structure
+## 5. Project structure
 
 ```text
-FDE_Agentic_RAG_IT_Copilot/
-│
+.
 ├── app/
-│   ├── api/
-│   │   └── routes.py              # Chat, health and ingestion APIs
-│   │
+│   ├── api/routes.py            # /api/chat, /api/ingest, /api/health
 │   ├── core/
-│   │   ├── config.py              # Environment configuration
-│   │   └── logging.py             # Logging configuration
-│   │
+│   │   ├── config.py            # Settings read from .env
+│   │   └── logging.py
 │   ├── rag/
-│   │   ├── state.py               # LangGraph state + structured decisions
-│   │   ├── vectorstore.py         # Pinecone + embeddings
-│   │   └── workflow.py            # Complete Agentic RAG graph
-│   │
+│   │   ├── state.py             # Graph state and structured LLM outputs
+│   │   ├── vectorstore.py       # Pinecone index, embeddings, stable chunk IDs
+│   │   └── workflow.py          # The full LangGraph workflow
 │   ├── services/
-│   │   ├── audit.py               # SQLite query audit
-│   │   └── ingestion.py           # PDF/TXT/MD/DOCX loading + chunking
-│   │
-│   └── main.py                    # FastAPI application
-│
-├── data/
-│   └── sample_kb/
-│       ├── company_it_handbook.md
-│       └── service_desk_runbook.md
-│
-├── static/
-│   ├── css/style.css
-│   └── js/app.js
-│
-├── templates/
-│   └── index.html
-│
-├── tests/
-│   └── test_ingestion.py
-│
-├── uploads/
-├── .env.example
+│   │   ├── audit.py             # SQLite audit log
+│   │   └── ingestion.py         # PDF/TXT/MD/DOCX loading and chunking
+│   └── main.py                  # FastAPI app
+├── data/sample_kb/              # Sample NovaRetail documents
+├── evals/
+│   ├── run_eval.py              # Evaluation runner
+│   ├── cases.json               # 29 labeled questions
+│   └── injection_cases.json     # Prompt-injection checks (separate namespace)
+├── static/                      # CSS and JavaScript
+├── templates/index.html
+├── ingest_sample_kb.py          # Loads the sample KB into Pinecone
+├── run.py                       # Local dev server
 ├── Dockerfile
-├── ingest_sample_kb.py
 ├── requirements.txt
-├── run.py
-└── README.md
+└── .env.example
 ```
 
 ---
 
-## 7. Setup
+## 6. Setup
 
-### Step 1 — Create virtual environment
+**Requirements:** Python 3.11 or newer, and accounts and API keys for OpenAI, Pinecone and Tavily.
+
+### 1. Create a virtual environment and install packages
 
 ```bash
 python -m venv venv
-```
-
-Windows:
-
-```bash
-venv\Scripts\activate
-```
-
-macOS/Linux:
-
-```bash
-source venv/bin/activate
-```
-
-### Step 2 — Install dependencies
-
-```bash
+source venv/bin/activate        # macOS / Linux
+venv\Scripts\activate           # Windows
 pip install -r requirements.txt
 ```
 
-### Step 3 — Configure environment
+### 2. Configure the environment
 
-Create a `.env` file in the project root directory with the following variables:
-
-```env
-# LLM API Keys
-GROQ_API_KEY=your_groq_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
-
-# External Search
-TAVILY_API_KEY=your_tavily_api_key_here
-
-# Vector Database (Pinecone)
-PINECONE_API_KEY=your_pinecone_api_key_here
-PINECONE_INDEX_NAME=fde-it-support-rag
-PINECONE_NAMESPACE=company-it-kb
-
-# LLM Models
-GROQ_MODEL=openai/gpt-oss-20b
-OPENAI_MODEL=gpt-4o-mini
-EMBEDDING_MODEL=text-embedding-3-small
-
-# Security
-ADMIN_API_KEY=change-me-in-production
-
-# Application Settings
-APP_ENV=development
+```bash
+cp .env.example .env
 ```
 
-#### Environment Variable Reference
+Open `.env` and fill in `OPENAI_API_KEY`, `TAVILY_API_KEY`, `PINECONE_API_KEY`, and a real `ADMIN_API_KEY`. Never commit `.env`.
 
-| Variable | Description | Example | Required |
-|---|---|---|---|
-| `GROQ_API_KEY` | API key for Groq LLM (routing, grading, generation) | `gsk_...` | ✅ Yes |
-| `OPENAI_API_KEY` | API key for OpenAI (embeddings and fallback LLM) | `sk-...` | ✅ Yes |
-| `TAVILY_API_KEY` | API key for Tavily web search | `tvly-...` | ✅ Yes |
-| `PINECONE_API_KEY` | API key for Pinecone vector database | `pckey-...` | ✅ Yes |
-| `PINECONE_INDEX_NAME` | Pinecone index name | `fde-it-support-rag` | ⚠️ Optional (default: `fde-it-support-rag`) |
-| `PINECONE_NAMESPACE` | Pinecone namespace for document isolation | `company-it-kb` | ⚠️ Optional (default: `company-it-kb`) |
-| `GROQ_MODEL` | Groq model identifier | `openai/gpt-oss-20b` | ⚠️ Optional (default: `openai/gpt-oss-20b`) |
-| `OPENAI_MODEL` | OpenAI model identifier | `gpt-4o-mini` | ⚠️ Optional (default: `gpt-4o-mini`) |
-| `EMBEDDING_MODEL` | Embedding model for vectorization | `text-embedding-3-small` | ⚠️ Optional (default: `text-embedding-3-small`) |
-| `ADMIN_API_KEY` | Secret key for admin endpoints (document ingestion) | `your-secure-key` | ⚠️ Optional (default: `change-me`) |
-| `APP_ENV` | Application environment | `development` or `production` | ⚠️ Optional (default: `development`) |
-
-**⚠️ Important Security Notes:**
-
-- Never commit `.env` to version control. Add it to `.gitignore`.
-- Change `ADMIN_API_KEY` to a secure random value in production.
-- Use environment variables instead of hardcoding secrets.
-- Restrict API key access to only the services that need them.
-
-### Step 4 — Load sample company knowledge
+### 3. Load the sample knowledge base
 
 ```bash
 python ingest_sample_kb.py
 ```
 
-This demonstrates the RAG ingestion pipeline:
+The first request creates the Pinecone index if it does not exist.
 
-```text
-Company Documents
-   ↓
-Load Documents
-   ↓
-Chunk Text
-   ↓
-HuggingFace Embeddings
-   ↓
-Pinecone Vector Database
-```
-
-### Step 5 — Run the application
+### 4. Run the app
 
 ```bash
 python run.py
 ```
 
-Open:
-
-```text
-http://127.0.0.1:8000
-```
-
-FastAPI API docs:
-
-```text
-http://127.0.0.1:8000/docs
-```
+Open **http://127.0.0.1:8080**. API docs are at **http://127.0.0.1:8080/docs**.
 
 ---
 
-## 8. Classroom Demo Scenarios
+## 7. Configuration reference
 
-### Demo A — Private KB Success
+All settings come from `.env` (or real environment variables).
 
-Ask:
+| Variable | Default | Meaning |
+|---|---|---|
+| `OPENAI_API_KEY` | none (required) | OpenAI key |
+| `TAVILY_API_KEY` | none (required) | Tavily key |
+| `PINECONE_API_KEY` | none (required) | Pinecone key |
+| `PINECONE_INDEX_NAME` | `agentic-rag-chatbot` | Pinecone index |
+| `PINECONE_NAMESPACE` | `company-it-kb` | Namespace inside the index |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Chat model |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model |
+| `TOP_K` | `4` | Chunks retrieved per search |
+| `MAX_RETRIES` | `1` | Query rewrites allowed before the web step. `0` skips the rewrite. |
+| `ADMIN_API_KEY` | `change-me` | Key required for uploads |
+| `MAX_UPLOAD_MB` | `10` | Maximum upload size |
+| `REDACT_TERMS` | `NovaRetail,NovaSecure` | Names masked as `[company]` before web search |
+| `APP_ENV` | `development` | When not `development`, uploads are refused while the admin key still starts with `change-me` |
+| `AUDIT_DB_PATH` | `data/audit.db` | SQLite audit file |
+| `UPLOAD_DIR` | `uploads/` | Where uploaded files are saved |
 
-> **How do I connect to the company VPN from home?**
-
-Expected path:
-
-```text
-Router → KB
-Private KB Retrieval
-KB Grade → GOOD
-Generate from Private KB
-```
-
-Teaching point:
-
-> Trusted internal company knowledge is preferred. No public web call is necessary.
-
----
-
-### Demo B — Company Policy Question
-
-Ask:
-
-> **Can IT support ask me to share my MFA code?**
-
-The internal handbook says employees must never share passwords or MFA codes with support personnel.
-
-Expected path:
-
-```text
-Router → KB
-Private KB Retrieval
-KB Grade → GOOD
-Private KB Answer
-```
-
-Teaching point:
-
-> RAG allows the model to answer using company-specific information it was never trained on.
+> **Changing `EMBEDDING_MODEL` after you have indexed documents** changes the vector size. The app will return an error that explains the mismatch. It never deletes an index by itself. Use a new `PINECONE_INDEX_NAME` and re-ingest.
 
 ---
 
-### Demo C — External / Current Information
+## 8. Try it
 
-Ask:
+Example questions and the path each one is designed to take:
 
-> **What is the latest Microsoft Teams outage guidance?**
+| Ask | Expected path |
+|---|---|
+| How do I connect to the company VPN? | Route → KB, retrieve, grade GOOD, answer from KB |
+| What is the process for requesting a company-issued mobile phone? | KB weak, rewrite, KB weak, **stop**. No web call. |
+| What is the latest Microsoft Teams outage guidance? | KB weak, rewrite, KB weak, web search, answer labeled external |
+| Hello! | Direct answer. No retrieval. |
 
-Expected path when internal documents do not answer it:
-
-```text
-Router → KB
-Private KB Retrieval
-KB Grade → WEAK
-Tavily Search
-Web Grade → GOOD
-Web Answer
-```
-
-Teaching point:
-
-> Agentic RAG can choose another information source rather than blindly answering from irrelevant vectors.
+The right-hand panel shows every step the agent took for the last question, including the exact query sent to the web.
 
 ---
 
-### Demo D — Query Rewrite
+## 9. Adding documents
 
-Ask a deliberately vague question such as:
+Use **+ Add Company Document** in the sidebar, enter the admin key, and choose a `.pdf`, `.txt`, `.md` or `.docx` file.
 
-> **My work communication app is acting strange after the new update. What should I do?**
-
-If both KB and first external retrieval are weak, the workflow can rewrite the query and retry.
-
-Teaching point:
-
-> Retrieval failure does not immediately mean failure. An agent can improve the search query and try again while using a retry guard to avoid loops.
+- The key is compared in constant time. Files over `MAX_UPLOAD_MB`, empty files and unreadable files are rejected with a clear message.
+- Each chunk gets a **stable ID** built from the file name and chunk position. Uploading the same file again **overwrites** its chunks instead of creating duplicates.
+- A file with the same name replaces the earlier one.
+- If you edit a file so it becomes shorter, chunks from the old longer version can remain. See [Known limitations](#known-limitations).
 
 ---
 
-### Demo E — Direct Conversation
-
-Ask:
-
-> **Hello!**
-
-Expected path:
-
-```text
-Router → DIRECT
-Direct Answer
-```
-
-Teaching point:
-
-> Not every message should trigger expensive vector search or web search.
-
----
-
-## 9. Document Upload Demo
-
-The sidebar contains **Add Company Document**.
-
-Use the `ADMIN_API_KEY` from `.env`.
-
-Upload one of:
-
-- `.pdf`
-- `.txt`
-- `.md`
-- `.docx`
-
-The backend performs:
-
-```text
-Upload
-  ↓
-Validate Type
-  ↓
-Load Text
-  ↓
-Recursive Chunking
-  ↓
-Embeddings
-  ↓
-Pinecone Indexing
-  ↓
-Immediately Available for Retrieval
-```
-
-This is useful in an FDE demonstration because the customer does not want to edit Python every time a new policy is published.
-
----
-
-## 10. API Endpoints
+## 10. API
 
 ### `GET /api/health`
 
-Health check.
+Returns `{"status": "ok", "service": "..."}`.
 
 ### `POST /api/chat`
 
-Request:
-
-```json
-{
-  "question": "How do I reset my company password?"
-}
+```bash
+curl -X POST http://127.0.0.1:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How do I connect to the company VPN?"}'
 ```
 
-Response contains:
+Response:
 
 ```json
 {
   "answer": "...",
   "source_used": "private_kb",
   "trace": [
-    "Router → KB",
+    "Router → KB (company-specific: True)",
     "Private KB retrieval → 4 chunks",
     "KB evidence grade → GOOD",
     "Answer generation → PRIVATE KB"
   ],
-  "citations": []
+  "citations": [{"title": "company_it_handbook.md", "url": "", "type": "private_kb"}],
+  "rewritten_query": "How do I connect to the company VPN?"
 }
 ```
 
+`source_used` is one of `private_kb`, `web_search`, `direct` or `insufficient_evidence`. Question length is 2 to 3000 characters. Internal errors return a generic 500 message. The full error is written to the server log.
+
 ### `POST /api/ingest`
 
-Protected by the `X-Admin-Key` request header.
+Requires the `X-Admin-Key` header. Send the file as multipart form data.
 
-Uploads a document and adds its chunks to Pinecone.
+```bash
+curl -X POST http://127.0.0.1:8080/api/ingest \
+  -H "X-Admin-Key: YOUR_ADMIN_KEY" \
+  -F "file=@policy.md"
+```
+
+| Status | Meaning |
+|---|---|
+| 200 | Indexed. Returns file name and chunk count. |
+| 400 | Unsupported type, empty file, or unreadable file |
+| 401 | Wrong admin key |
+| 413 | File larger than `MAX_UPLOAD_MB` |
+| 503 | Server not in development and admin key not changed |
 
 ---
+
+## 11. Security and privacy
+
+### What is in place
+
+- **Private first, web last.** Company-specific questions never trigger a web search.
+- **Query masking before web search.** Email addresses, IPv4 addresses, internal host names (`.local`, `.corp`, `.internal`, `.lan`), ticket IDs (INC, TKT, REQ, CHG, SR), key-like strings and the names in `REDACT_TERMS` are replaced with placeholders. The exact text sent is shown in the trace.
+- **Prompt-injection defense.** Retrieved documents and web results are wrapped in `<untrusted_data>` tags with an instruction to treat them as reference material only. Fake closing tags inside documents are removed. The app has no tools that take actions, so the worst case is a wrong answer, not a changed system.
+- **Index safety.** A vector-size mismatch stops the app with an error and never deletes the index.
+- **Upload hardening.** Constant-time key check, size limit, empty and unreadable file handling, and no default admin key outside development.
+- **Frontend safety.** All text is HTML-escaped before display. Source links are only made clickable for `http` and `https` addresses.
+- **No secrets in git.** `.env`, uploaded files and the audit database are git-ignored.
+
+### What is not in place
+
+- Masking uses pattern matching. It will **miss** personal names, project code names and details written in ordinary sentences.
+- There is **one shared admin key**, and there is no end-user login.
+- There is **no rate limiting** on `/api/chat`.
+- The audit log stores the **raw question text**, with no user ID and no retention policy.
+- Prompt-injection defense lowers the risk but cannot remove it. It is checked with `evals/injection_cases.json`, which is a small test, not a proof.
+
+---
+
+## 12. Evaluation
+
+The `evals/` folder contains a labeled test set and a runner. It calls the real workflow and checks each question automatically.
+
+```bash
+python -m evals.run_eval                # 29 questions against the sample KB
+python -m evals.run_eval --runs 3       # repeat to find flaky cases
+```
+
+For the injection checks, point the app at a **separate namespace** that holds the poisoned test documents, and run:
+
+```bash
+python -m evals.run_eval --cases evals/injection_cases.json
+```
+
+**What it measures**
+
+- Overall pass rate (a question passes only if every check passes)
+- Router accuracy: company-specific vs public
+- Source accuracy: KB, web, direct or stop
+- **Privacy violations**: a company question reaching the web, or internal text found in a web query. This must be 0.
+- Required and forbidden text in answers
+- Latency (average, p90, maximum)
+
+
+**Latest results** (36 questions, 1 run, gpt-4o-mini, sample KB)
+
+| Metric | Result |
+|---|---|
+| Overall pass rate | 35/36 |
+| Router accuracy (company vs public) | 17/17 |
+| Source accuracy | 35/36 |
+| Privacy violations | 0 |
+| Latency (avg / p90 / max) | 5.7 / 11.6 / 12.5 s |
+
+**How to read these numbers.** There are only 29 questions, so one case moves the score by about 3 points. The answer checks look for specific facts, not for full answer quality. The labels are the author's judgement of correct behavior. Treat the results as a regression check, not as a benchmark.
+
+---
+
+## 13. Docker
+
+```bash
+docker build -t it-support-rag .
+docker run --rm -p 8080:8080 --env-file .env \
+  -e AUDIT_DB_PATH=/app/storage/audit.db \
+  -e UPLOAD_DIR=/app/storage/uploads \
+  -v it_support_storage:/app/storage \
+  it-support-rag
+```
+
+The named volume keeps the audit log and uploaded files across restarts. The container currently runs as root and has no health check.
+
+---
+
+## 14. Known limitations
+
+- **The router and the grader are language-model judgements.** They can be wrong, and results vary between runs. The evaluation set exists to measure this.
+- **Vague questions are not clarified.** "My work app is acting strange" ends in "not found" when it should ask which app.
+- **No conversation memory.** Each question is answered alone, so follow-ups like "what about on Mac?" do not work.
+- **Retrieval is vector-only.** There is no keyword search or reranking, which hurts exact terms such as error codes.
+- **Citations are file-level.** They name the file, not the section or page.
+- **Shorter re-uploads leave stale chunks.** Deleting old chunks by ID prefix is not implemented.
+- **No streaming.** Each answer needs several model calls and arrives all at once.
+- **Small test coverage.** There is an evaluation harness but no unit-test suite.
+- **No deployed demo yet.**
+
+## 15. Roadmap
+
+1. Run and publish the evaluation, then fix failures by cause: bug, wrong label, or flaky.
+2. Ask a clarifying question for vague requests.
+3. Add conversation history.
+4. Add hybrid search and a reranker, then re-run the evaluation to measure the change.
+5. Add section-level citations.
+6. Add unit tests and a CI workflow.
+7. Add per-user login and rate limiting.
+8. Deploy a public demo.
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).

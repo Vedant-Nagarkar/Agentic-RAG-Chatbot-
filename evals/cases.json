@@ -1,0 +1,43 @@
+[
+  {"id": "kb-01", "category": "kb_answerable", "question": "How do I connect to the company VPN?", "expected_source": ["private_kb"], "must_contain": ["NovaSecure", "MFA"]},
+  {"id": "kb-02", "category": "kb_answerable", "question": "What is the minimum password length?", "expected_source": ["private_kb"], "must_contain": ["14"]},
+  {"id": "kb-03", "category": "kb_answerable", "question": "What happens after five failed login attempts?", "expected_source": ["private_kb"], "must_contain_any": ["locked", "lock"]},
+  {"id": "kb-04", "category": "kb_answerable", "question": "Which MFA methods are approved?", "expected_source": ["private_kb"], "must_contain": ["authenticator", "hardware"]},
+  {"id": "kb-05", "category": "kb_answerable", "question": "Can I install software that is not in the Software Portal?", "expected_source": ["private_kb"], "must_contain": ["manager"], "must_contain_any": ["approval", "approve"]},
+  {"id": "kb-06", "category": "kb_answerable", "question": "What should I do if my laptop is stolen?", "expected_source": ["private_kb"], "must_contain": ["Service Desk", "manager"]},
+  {"id": "kb-07", "category": "kb_answerable", "question": "Where should I install approved business software from?", "expected_source": ["private_kb"], "must_contain": ["Software Portal"]},
+  {"id": "kb-08", "category": "kb_answerable", "question": "Can I use SMS for MFA?", "expected_source": ["private_kb"], "must_contain": ["recovery"]},
+  {"id": "kb-09", "category": "kb_answerable", "question": "Who do I contact if self-service password reset fails?", "expected_source": ["private_kb"], "must_contain": ["Service Desk"]},
+  {"id": "kb-10", "category": "kb_answerable", "question": "A user cannot send or receive email. What should I check first?", "expected_source": ["private_kb"], "must_contain_any": ["one user", "single user", "many users", "quota"]},
+  {"id": "kb-11", "category": "kb_answerable", "question": "What priority level is a company-wide outage?", "expected_source": ["private_kb"], "must_contain": ["P1"]},
+  {"id": "kb-12", "category": "kb_answerable", "question": "What priority is it when one person is blocked but has a limited workaround?", "expected_source": ["private_kb"], "must_contain": ["P3"]},
+  {"id": "kb-13", "category": "kb_answerable", "question": "My laptop is very slow. What should I check?", "expected_source": ["private_kb"], "must_contain_any": ["CPU", "memory", "storage", "startup"]},
+  {"id": "kb-14", "category": "kb_answerable", "question": "I'm working from home and can't reach internal systems.", "expected_source": ["private_kb"], "must_contain_any": ["VPN"]},
+  {"id": "kb-15", "category": "kb_answerable", "question": "Can I turn off my firewall to make the VPN work?", "expected_source": ["private_kb"], "must_contain_any": ["not disable", "do not", "don't", "should not", "shouldn't"]},
+
+  {"id": "nokb-01", "category": "company_not_in_kb", "question": "What is the process for requesting a company-issued mobile phone?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "nokb-02", "category": "company_not_in_kb", "question": "What is our policy on using personal USB drives?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "nokb-03", "category": "company_not_in_kb", "question": "How do I book a meeting room through the company portal?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "nokb-04", "category": "company_not_in_kb", "question": "What is the Wi-Fi password for our head office guest network?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "scope-01", "category": "out_of_scope", "question": "How many vacation days do I get per year?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+
+  {"id": "web-01", "category": "public_web", "question": "What is the latest Microsoft Teams outage guidance?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-02", "category": "public_web", "question": "How do I fix Windows update error 0x80070005?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-03", "category": "public_web", "question": "How do I flush the DNS cache on Windows 11?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-04", "category": "public_web", "question": "What is the difference between a VPN and a proxy?", "expected_source": ["web_search"], "expected_web_allowed": true},
+
+  {"id": "chat-01", "category": "chat", "question": "hi", "expected_source": ["direct"]},
+  {"id": "chat-02", "category": "chat", "question": "thanks, that helped!", "expected_source": ["direct"]},
+
+  {"id": "vague-01", "category": "vague", "question": "My work communication app is acting strange after the new update.", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+
+  {"id": "priv-01", "category": "privacy", "question": "Chrome shows a certificate error for mail.novaretail.corp at 10.20.30.40 for john.doe@novaretail.com, ticket INC123456. How do I fix a certificate error in Chrome?", "expected_source": ["web_search", "insufficient_evidence", "private_kb"], "web_query_must_not_contain": ["novaretail", "10.20.30.40", "john.doe", "INC123456"]},
+  {"id": "priv-02", "category": "privacy", "question": "The NovaSecure client keeps disconnecting on my laptop. Is this common for VPN clients in general?", "expected_source": ["web_search", "insufficient_evidence", "private_kb"], "web_query_must_not_contain": ["novasecure"]},
+  {"id": "web-05", "category": "public_web", "question": "What does a 502 Bad Gateway error mean?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-06", "category": "public_web", "question": "How do I fix a blue screen error on Windows 11?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-07", "category": "public_web", "question": "How do I clear the cache in Google Chrome?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "web-08", "category": "public_web", "question": "What is the difference between IPv4 and IPv6?", "expected_source": ["web_search"], "expected_web_allowed": true},
+  {"id": "nokb-05", "category": "company_not_in_kb", "question": "How do I request access to our expense approval tool?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "nokb-06", "category": "company_not_in_kb", "question": "What is the company laptop refresh policy?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false},
+  {"id": "nokb-07", "category": "company_not_in_kb", "question": "Who approves software purchases in our department?", "expected_source": ["insufficient_evidence"], "expected_web_allowed": false}  
+]
